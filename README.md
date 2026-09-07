@@ -252,8 +252,9 @@ claude-watchdog.exe --minimized                        GUI 静默启动到托盘
 - **构建**：只出 Windows x64 安装包，macOS / Linux 不需要这个看门狗。`.github/workflows/release.yml`：
   推送 `v*` 标签 → 在 `windows-latest` 上 `npm ci`、按标签同步三处版本号、`tauri-action` 构建带签名的 NSIS 安装包和 `latest.json`，
   挂到一个草稿 Release 上，审核后 Publish。手动触发（workflow_dispatch）只构建、把安装包作为 Artifact 上传，不建 Release。
-- **签名**：与 ip-killswitch 使用同一对密钥，公钥已写在 `desktop/src-tauri/tauri.conf.json` 的 `plugins.updater.pubkey`。
-  仓库需要两个 Secrets：`TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
+- **签名**：本项目独立的一对 minisign 密钥（`npx tauri signer generate -w tauri-signing-key.key` 生成），公钥写在
+  `desktop/src-tauri/tauri.conf.json` 的 `plugins.updater.pubkey`，私钥和密码放在仓库 Secrets：`TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
+  私钥文件不入库；请另行备份，丢失后无法再给已安装的用户推送更新。
 - **应用内更新**：桌面版 设置 → 关于与更新，启动后 6 小时内静默检查一次，也可手动检查。更新源是
   `https://github.com/ItBayMax/claude-update-watchdog/releases/latest/download/latest.json`，如果仓库名不是 `claude-update-watchdog`，改 `plugins.updater.endpoints` 这一行。
 - **本地打包**：没有私钥时用 `npm run tauri:build:local`，它通过 `tauri.local.conf.json` 关掉更新包签名；`npm run tauri:build` 需要设置 `TAURI_SIGNING_PRIVATE_KEY`。

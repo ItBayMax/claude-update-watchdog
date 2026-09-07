@@ -66,7 +66,7 @@ npm run tauri:build         # 正式打包，需要 TAURI_SIGNING_PRIVATE_KEY（
 
 **发布与自动更新。** 推送 `v*` 标签后 `.github/workflows/release.yml` 在 Windows 上构建带签名的 NSIS 安装包和 `latest.json`，挂到草稿 Release。
 应用内「设置 → 关于与更新」通过 `tauri-plugin-updater` 从 `plugins.updater.endpoints` 拉取 `latest.json`，用 `pubkey` 校验签名后下载安装并重启。
-公钥与 ip-killswitch 相同，私钥存在仓库 Secrets `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
+密钥对为本项目独立生成，私钥与密码存在仓库 Secrets `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`，私钥文件不入库。
 `tauri.local.conf.json` 只关掉 `createUpdaterArtifacts`，让没有私钥的机器也能打包。
 
 `cargo check` 需要先 `npx vite build` 生成 `dist/`（tauri-build 在编译期打包前端）。
@@ -136,7 +136,7 @@ AppData 下的写入会被重定向到 `Packages\Claude_pzs8sxrjxfjjc\LocalCache
 
 ## 变更记录
 
-- **0.2.0**（2026-09-07）：接入 `tauri-plugin-updater`，设置页新增「关于与更新」；`tauri.conf.json` 配置 GitHub Releases 更新源与签名公钥（与 ip-killswitch 相同）；
+- **0.2.0**（2026-09-07）：接入 `tauri-plugin-updater`，设置页新增「关于与更新」；`tauri.conf.json` 配置 GitHub Releases 更新源与本项目的签名公钥；
   新增 `.github/workflows/release.yml`（仅 Windows x64）与 `npm run tauri:build:local`。
 - **0.1.4**（2026-09-06）：新增浏览器演示模式（非 Tauri 环境自动使用 `src/mock.ts` 示例数据；`?screenshot=1`、`?tab=` 参数），用于文档截图；桌面程序行为不变。移除「启动会话」页及相关代码（`launcher.rs`、`--cli-info`、`percent-encoding` 依赖、`dialog:allow-open` 权限）。
   它达不到真正的目标：独立 CLI 无法免登录，每个请求都要带凭证；Desktop 的登录也不能桥接给外部 CLI，令牌只在 Desktop 进程内经 SDK 通道供给内置引擎，

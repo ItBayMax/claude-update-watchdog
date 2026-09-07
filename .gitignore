@@ -1,0 +1,31 @@
+# --- repo root: claude-update-watchdog ---
+# The desktop app has its own .gitignore under desktop/ (node_modules, dist,
+# src-tauri/target, signing keys, ...). This file covers the rest of the repo.
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+.idea/
+.vscode/
+.claude/
+
+# Local logs and scratch output
+*.log
+*.tmp
+*.bak
+
+# Desktop app build outputs (belt and braces; desktop/.gitignore covers them too)
+desktop/node_modules/
+desktop/dist/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/.tsbuild/
+desktop/*.tsbuildinfo
+
+# Never commit signing material
+*.key
+*.key.pub
+*.pem

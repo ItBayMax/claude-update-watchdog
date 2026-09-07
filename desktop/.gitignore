@@ -1,0 +1,111 @@
+# ──────────────────────────────────────────────────────────────────────────
+# Dependencies
+# ──────────────────────────────────────────────────────────────────────────
+node_modules/
+
+# ──────────────────────────────────────────────────────────────────────────
+# Build output
+# ──────────────────────────────────────────────────────────────────────────
+dist/
+dist-ssr/
+dist-electron/
+build/
+out/
+coverage/
+
+# Vite / TS / tooling caches
+.cache/
+.tmp/
+tmp/
+temp/
+.vite/
+.eslintcache
+*.tsbuildinfo
+.tsbuild/
+
+# ──────────────────────────────────────────────────────────────────────────
+# Rust / Tauri
+# ──────────────────────────────────────────────────────────────────────────
+src-tauri/target/
+src-tauri/gen/
+# Tauri downloads WiX into target/release/wix/ (already covered) but very old
+# CLI versions used to drop a sibling WixTools/. Ignore it just in case.
+WixTools/
+
+# IMPORTANT: keep these tracked.
+# - src-tauri/Cargo.lock      → binary crate, commit for reproducible builds.
+# - src-tauri/icons/          → build input (used by include_bytes! and bundle
+#                                config); regenerable via scripts/gen-icons.mjs
+#                                but committing them avoids a chicken-and-egg
+#                                "must run node before cargo check".
+# - src-tauri/capabilities/   → Tauri 2 permissions definition.
+
+# ──────────────────────────────────────────────────────────────────────────
+# Logs — scratch capture (build / debug). Use the .logs/ dir when teeing
+# output. The application's own runtime logs go to the OS log dir, never
+# into the project tree.
+# ──────────────────────────────────────────────────────────────────────────
+.logs/
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ──────────────────────────────────────────────────────────────────────────
+# Environment files
+# ──────────────────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+src-tauri/.env
+src-tauri/.env.*
+*.local
+
+# ──────────────────────────────────────────────────────────────────────────
+# Secrets — Tauri signing keys must never be committed
+# ──────────────────────────────────────────────────────────────────────────
+*.key
+*.key.pub
+tauri-signing-key
+tauri-signing-key.*
+*.pem
+
+# ──────────────────────────────────────────────────────────────────────────
+# Editor / IDE / AI tool local state
+# ──────────────────────────────────────────────────────────────────────────
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+.fleet/
+.qoder/
+.claude/
+*.swp
+*.swo
+*.swn
+*.sw?
+*~
+
+# Visual Studio leftovers (occasionally appear when MSBuild auto-probes)
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# ──────────────────────────────────────────────────────────────────────────
+# OS metadata
+# ──────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+$RECYCLE.BIN/
+
+# ──────────────────────────────────────────────────────────────────────────
+# Backups / scratch
+# ──────────────────────────────────────────────────────────────────────────
+*.bak
+*.tmp
+*.orig

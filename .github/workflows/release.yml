@@ -1,0 +1,127 @@
+name: Release (Windows)
+
+# Tag push `v*`  → build the signed NSIS installer + latest.json and attach them
+#                  to a (draft) GitHub Release. The in-app updater reads
+#                  https://github.com/<owner>/<repo>/releases/latest/download/latest.json
+# Manual run      → build only and upload the installer as a workflow artifact
+#                  (no release), useful to test a branch.
+#
+# Required repository secrets (same key pair as ip-killswitch; the matching
+# public key is in desktop/src-tauri/tauri.conf.json):
+#   TAURI_SIGNING_PRIVATE_KEY
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: "Create the release as a draft (tag builds only)"
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+      ref:
+        description: "Tag or branch to build (manual run)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: desktop
+
+jobs:
+  build-windows:
+    name: Build Windows x64 installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+
+      - run: npm ci
+
+      # On a tag push, pin package.json / Cargo.toml / tauri.conf.json to the tag
+      # so the installer and the in-app version match the release.
+      - name: Sync version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Pinning version to $VERSION"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          node -e "
+            const fs = require('fs');
+            const p = 'src-tauri/tauri.conf.json';
+            const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+            j.version = '$VERSION';
+            fs.writeFileSync(p, JSON.stringify(j, null, 2) + '\n');
+            const ctoml = 'src-tauri/Cargo.toml';
+            let c = fs.readFileSync(ctoml, 'utf8');
+            c = c.replace(/^version = \"[^\"]+\"/m, 'version = \"$VERSION\"');
+            fs.writeFileSync(ctoml, c);
+          "
+
+      - name: Build and attach to release (tag push)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: "Claude Watchdog ${{ github.ref_name }}"
+          releaseBody: |
+            ## Claude Watchdog ${{ github.ref_name }}
+
+            Windows x64 only. Download `Claude Watchdog_*_x64-setup.exe` (per-user NSIS installer).
+            `latest.json` and the `.sig` file are for the in-app updater.
+          releaseDraft: ${{ github.event.inputs.draft || 'true' }}
+          prerelease: false
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true
+
+      - name: Build only (manual run without a tag)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: desktop
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: claude-watchdog-windows-x64
+          path: |
+            desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+            desktop/src-tauri/target/release/bundle/nsis/*.sig
+            desktop/src-tauri/target/release/bundle/nsis/latest.json
+          if-no-files-found: warn
+          retention-days: 14

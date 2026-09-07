@@ -1,0 +1,12 @@
+# Normalise line endings in the repo; checkout follows core.autocrlf.
+* text=auto
+
+# PowerShell is happiest with CRLF on Windows.
+*.ps1 text eol=crlf
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.ico binary
+*.icns binary
+*.exe binary

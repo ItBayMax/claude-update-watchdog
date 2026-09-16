@@ -60,6 +60,97 @@ pub fn recent_attempts(state: &AppState) -> usize {
         .count()
 }
 
+/// Launch the AUMID once and wait up to `WAIT_UP_SECS` for a process of the
+/// current version to appear. Returns whether Claude came up.
+fn launch_and_wait(
+    cfg: &crate::config::AppConfig,
+    aumid: &str,
+    current: Option<&str>,
+    record: &mut RepairRecord,
+    phase: &str,
+) -> bool {
+    match crate::packages::launch_aumid(aumid) {
+        Ok(()) => {
+            record.relaunched = true;
+            info!(phase, "repair: launched {aumid}");
+        }
+        Err(e) => {
+            warn!(phase, "repair: launch call failed: {e}");
+            return false;
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(WAIT_UP_SECS);
+    loop {
+        std::thread::sleep(Duration::from_secs(1));
+        let now = crate::packages::claude_processes(&cfg.package_family, current).members;
+        let alive = now.iter().any(|p| {
+            current
+                .map(|c| c.eq_ignore_ascii_case(&p.package_full_name))
+                .unwrap_or(true)
+        });
+        if alive {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            warn!(phase, "repair: no Claude process appeared within {WAIT_UP_SECS}s");
+            return false;
+        }
+    }
+}
+
+/// Restart the AppX Deployment Service.
+///
+/// When the per-user container job is wedged with no process inside it, the
+/// object is kept alive by a leaked handle. Enumeration shows the remaining
+/// handle holders are processes an unprivileged caller cannot even open, and
+/// AppXSvc (inside a shared svchost) is the service that owns container
+/// lifetime. Restarting it drops those handles without killing svchost itself.
+fn restart_appxsvc() -> Result<String, String> {
+    // -Force also stops dependents (WSAIFabricSvc on machines with the Android
+    // subsystem), and Start-Service does not bring them back, so restart the
+    // ones that were running.
+    let script = "\
+$ErrorActionPreference = 'Stop'
+$svc = Get-Service -Name AppXSvc
+$deps = @($svc.DependentServices | Where-Object { $_.Status -eq 'Running' } | ForEach-Object { $_.Name })
+if ($svc.Status -eq 'Running') { Stop-Service -Name AppXSvc -Force }
+$deadline = (Get-Date).AddSeconds(20)
+while ((Get-Service -Name AppXSvc).Status -ne 'Stopped' -and (Get-Date) -lt $deadline) {
+  Start-Sleep -Milliseconds 300
+}
+Start-Service -Name AppXSvc
+foreach ($d in $deps) {
+  try { Start-Service -Name $d -ErrorAction Stop } catch { Write-Output \"dependent $d not restarted: $($_.Exception.Message)\" }
+}
+'AppXSvc=' + (Get-Service -Name AppXSvc).Status + ' restored_dependents=' + ($deps -join ',')";
+    crate::task::run_powershell(script)
+}
+
+/// Re-register the package for the current user.
+///
+/// `Add-AppxPackage -Register` rebuilds the per-user registration from the
+/// manifest that is already on disk. It does not touch `%APPDATA%\\Claude`,
+/// the package's LocalCache, or `%USERPROFILE%\\.claude`, so login, sessions
+/// and settings survive. This is deliberately NOT `Reset-AppxPackage`, which
+/// would wipe app data and force a fresh login.
+fn reregister_package(full_name: &str) -> Result<String, String> {
+    if !full_name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        return Err(format!("refusing to re-register suspicious name: {full_name}"));
+    }
+    let script = format!(
+        "\
+$ErrorActionPreference = 'Stop'
+$m = Join-Path $env:ProgramFiles 'WindowsApps\\{full_name}\\AppxManifest.xml'
+if (-not (Test-Path -LiteralPath $m)) {{ throw \"manifest not found: $m\" }}
+Add-AppxPackage -Register $m -DisableDevelopmentMode
+'registered'"
+    );
+    crate::task::run_powershell(&script)
+}
+
 /// Run the pipeline on the current thread (blocking; up to ~90 s).
 /// `app` is `None` in the headless CLI / scheduled-task modes.
 pub fn run_blocking(
@@ -173,56 +264,112 @@ pub fn run_blocking(
     }
     std::thread::sleep(Duration::from_secs(SETTLE_SECS));
 
-    // 3. relaunch, verify, retry once
-    let mut running = false;
-    for attempt in 1..=2u32 {
-        match crate::packages::launch_aumid(&aumid) {
-            Ok(()) => {
-                record.relaunched = true;
-                info!(attempt, "repair: launched {aumid}");
+    // 3. relaunch, escalating through container-level remedies when a plain
+    //    relaunch is not enough.
+    //
+    //    Two distinct failure classes produce the same 0x80070020:
+    //      A. a process of the old version survived  -> stopping it is the fix
+    //      B. the per-user container job is wedged with no process left in it
+    //         -> there is nothing to stop, and relaunching just fails again.
+    //    `procs.is_empty()` separates them: no package-identity process existed
+    //    when the snapshot was taken, so class B.
+    let container_wedged = procs.is_empty();
+    let stale_containers =
+        crate::eventlog::stale_containers(&cfg.package_family, current.as_deref(), 400);
+    if container_wedged {
+        warn!(
+            stale_containers = ?stale_containers,
+            "repair: no Claude process to stop -> container-level failure; \
+             terminating processes cannot fix this class"
+        );
+    }
+    for (pkg, id) in &stale_containers {
+        warn!(
+            container_id = %id,
+            "repair: container still open for {pkg} — this blocks the current version"
+        );
+    }
+
+    let mut running = launch_and_wait(&cfg, &aumid, current.as_deref(), &mut record, "relaunch");
+    let mut remedy: Option<&str> = None;
+
+    if !running && container_wedged && cfg.restart_appxsvc_on_container_failure {
+        if crate::admin::is_elevated() {
+            match restart_appxsvc() {
+                Ok(out) => {
+                    info!(status = %out.trim(), "repair: restarted AppXSvc");
+                    running =
+                        launch_and_wait(&cfg, &aumid, current.as_deref(), &mut record, "after-appxsvc");
+                    if running {
+                        remedy = Some("重启 AppXSvc");
+                    }
+                }
+                Err(e) => warn!("repair: could not restart AppXSvc: {e}"),
             }
-            Err(e) => {
-                warn!(attempt, "repair: launch call failed: {e}");
-                std::thread::sleep(Duration::from_secs(5));
-                continue;
+        } else {
+            warn!("repair: AppXSvc remedy skipped, not running as administrator");
+        }
+    }
+
+    if !running && container_wedged && cfg.reregister_on_container_failure {
+        if let Some(full) = current.as_deref() {
+            match reregister_package(full) {
+                Ok(_) => {
+                    info!(package = full, "repair: re-registered package for current user");
+                    running = launch_and_wait(
+                        &cfg,
+                        &aumid,
+                        current.as_deref(),
+                        &mut record,
+                        "after-reregister",
+                    );
+                    if running {
+                        remedy = Some("重新注册程序包");
+                    }
+                }
+                Err(e) => warn!("repair: re-register failed: {e}"),
             }
         }
-        let deadline = Instant::now() + Duration::from_secs(WAIT_UP_SECS);
-        loop {
-            std::thread::sleep(Duration::from_secs(1));
-            let now =
-                crate::packages::claude_processes(&cfg.package_family, current.as_deref()).members;
-            let alive = now.iter().any(|p| {
-                current
-                    .as_deref()
-                    .map(|c| c.eq_ignore_ascii_case(&p.package_full_name))
-                    .unwrap_or(true)
-            });
-            if alive {
-                running = true;
-                break;
-            }
-            if Instant::now() >= deadline {
-                break;
-            }
-        }
-        if running {
-            break;
-        }
-        warn!(attempt, "repair: no Claude process appeared within {WAIT_UP_SECS}s");
+    }
+
+    // One last plain retry for class A, where the first launch can race the
+    // container teardown.
+    if !running && !container_wedged {
         std::thread::sleep(Duration::from_secs(5));
+        running = launch_and_wait(&cfg, &aumid, current.as_deref(), &mut record, "retry");
     }
 
     record.success = running;
     record.finished_at = Utc::now();
-    record.message = if running {
-        format!(
+    record.message = match (running, remedy, container_wedged) {
+        (true, Some(r), _) => format!(
+            "容器级故障，已通过{}恢复并启动 Claude {}",
+            r,
+            record.target_version.clone().unwrap_or_default()
+        ),
+        (true, None, _) => format!(
             "已结束 {} 个进程并重新启动 Claude {}",
             killed_count,
             record.target_version.clone().unwrap_or_default()
-        )
-    } else {
-        "重新启动失败两次，请注销后重新登录或重启电脑".to_string()
+        ),
+        (false, _, true) => {
+            let blocker = if stale_containers.is_empty() {
+                "没有可结束的 Claude 进程，杀进程无效".to_string()
+            } else {
+                format!(
+                    "旧版本 {} 的容器仍未销毁，且没有可结束的进程",
+                    stale_containers
+                        .iter()
+                        .map(|(p, _)| crate::packages::version_of(p))
+                        .collect::<Vec<_>>()
+                        .join("、")
+                )
+            };
+            format!(
+                "容器级故障：{blocker}。补救手段均未生效，需要注销后重新登录或重启电脑"
+            )
+        }
+        (false, _, false) => "重新启动失败两次，请注销后重新登录或重启电脑".to_string(),
     };
     if running {
         if let Some(f) = &failure {

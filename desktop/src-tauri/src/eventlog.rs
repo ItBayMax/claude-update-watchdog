@@ -124,6 +124,12 @@ pub fn parse_container_event(xml: &str) -> Option<ContainerEvent> {
         217 => "销毁桌面 AppX 容器".to_string(),
         other => format!("事件 {other}"),
     };
+    let container_id = data_field(xml, "ContainerId").map(|s| {
+        s.trim()
+            .trim_start_matches('{')
+            .trim_end_matches('}')
+            .to_ascii_lowercase()
+    });
     Some(ContainerEvent {
         record_id,
         time,
@@ -132,6 +138,7 @@ pub fn parse_container_event(xml: &str) -> Option<ContainerEvent> {
         package_full_name,
         summary,
         error_hex,
+        container_id,
     })
 }
 
@@ -326,6 +333,89 @@ pub fn container_events(family: &str, max: usize) -> Vec<ContainerEvent> {
         .filter(|xml| hash.is_empty() || xml.contains(&hash))
         .filter_map(|xml| parse_container_event(xml))
         .take(max)
+        .collect()
+}
+
+/// Package full names whose desktop AppX container was created (210) but never
+/// destroyed (217) inside the queried window.
+///
+/// Windows will not host two containers of the same package family at once, so
+/// a container still open for an *older* version blocks the version that is
+/// registered now, and every launch fails with 0x80070020 at the "converting
+/// the job" step. This shows up even when the old version has no process left,
+/// which is precisely the case where terminating processes cannot help: the
+/// stale container is what must go, not a process.
+///
+/// Observed 2026-09-16 on this machine: the 1.52386.6.0 container stayed open
+/// from the 02:00 upgrade until the reboot 9.5 hours later, and its 217 only
+/// arrived during shutdown. The 2.110.0.0 container was created successfully
+/// 55 seconds after that.
+/// Containers must be paired by `ContainerId`, never counted per package: a
+/// failing launch emits 217 for a container that never got a 210, so a running
+/// tally drifts far negative and hides the real blocker. Measured on this
+/// machine over the broken window, the tally read -33 for the current version
+/// while a stale container was in fact open.
+///
+/// The blocking container can also be days older than the upgrade, so the query
+/// window has to be generous; `max` is the number of raw 210/217 records read.
+pub fn live_containers(family: &str, max: usize) -> Vec<(String, String)> {
+    let hash = crate::packages::family_parts(family).1;
+    let xpath = format!(
+        "*[System[Provider[@Name='{PROVIDER_APPMODEL}'] and (EventID=210 or EventID=217)]]"
+    );
+    let raw = match query(CHANNEL_APPMODEL, &xpath, max.clamp(200, 4000), true) {
+        Ok(l) => l,
+        Err(e) => {
+            debug!("live_containers: {e}");
+            return Vec::new();
+        }
+    };
+    // newest-first from the log, so replay oldest-first
+    let mut evs: Vec<ContainerEvent> = raw
+        .iter()
+        .filter(|xml| hash.is_empty() || xml.contains(&hash))
+        .filter_map(|xml| parse_container_event(xml))
+        .collect();
+    evs.reverse();
+
+    let mut open: std::collections::HashMap<String, (String, DateTime<Utc>)> =
+        std::collections::HashMap::new();
+    for e in &evs {
+        let (Some(id), Some(pkg)) = (e.container_id.as_deref(), e.package_full_name.as_deref())
+        else {
+            continue;
+        };
+        match e.event_id {
+            210 => {
+                open.insert(id.to_string(), (pkg.to_string(), e.time));
+            }
+            // A destroy for a container we never saw created is either older
+            // than the window or one of the phantom teardowns a failed launch
+            // emits. Dropping it is correct in both cases.
+            217 => {
+                open.remove(id);
+            }
+            _ => {}
+        }
+    }
+    let mut out: Vec<(String, String, DateTime<Utc>)> = open
+        .into_iter()
+        .map(|(id, (pkg, t))| (pkg, id, t))
+        .collect();
+    out.sort_by_key(|(_, _, t)| *t);
+    out.into_iter().map(|(pkg, id, _)| (pkg, id)).collect()
+}
+
+/// Containers still open for a version other than `current` — the blockers.
+/// Returns `(package_full_name, container_id)`, oldest first.
+pub fn stale_containers(family: &str, current: Option<&str>, max: usize) -> Vec<(String, String)> {
+    live_containers(family, max)
+        .into_iter()
+        .filter(|(pkg, _)| {
+            current
+                .map(|c| !c.eq_ignore_ascii_case(pkg))
+                .unwrap_or(false)
+        })
         .collect()
 }
 

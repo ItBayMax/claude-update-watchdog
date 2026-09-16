@@ -147,4 +147,6 @@ export interface AppConfig {
   close_to_tray: boolean;
   confirm_exit: boolean;
   log_level: string;
+  restart_appxsvc_on_container_failure: boolean;
+  reregister_on_container_failure: boolean;
 }

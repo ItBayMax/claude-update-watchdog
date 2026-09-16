@@ -1,6 +1,6 @@
 [package]
 name = "claude-watchdog"
-version = "0.2.0"
+version = "0.3.0"
 description = "Claude Desktop (MSIX) update watchdog: detects failed self-updates (0x80070020), stops leftover processes, relaunches Claude, and cleans orphaned package folders"
 authors = ["ItBayMax"]
 edition = "2021"

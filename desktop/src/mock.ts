@@ -139,6 +139,8 @@ let config: AppConfig = {
   close_to_tray: true,
   confirm_exit: true,
   log_level: "info",
+  restart_appxsvc_on_container_failure: true,
+  reregister_on_container_failure: false,
 };
 
 let scheduler: SchedulerState = "running";

@@ -41,6 +41,18 @@ pub struct AppConfig {
     pub confirm_exit: bool,
     #[serde(default = "AppConfig::default_log_level")]
     pub log_level: String,
+    /// Container-level failure remedy: restart the AppX Deployment Service.
+    /// Only used when there is no Claude process left to stop, which means the
+    /// container job is wedged and terminating processes cannot help. AppXSvc
+    /// is the most likely holder of the stale handle. Requires admin.
+    #[serde(default = "AppConfig::default_true")]
+    pub restart_appxsvc_on_container_failure: bool,
+    /// Last-resort remedy: re-register the package for the current user via
+    /// `Add-AppxPackage -Register`. This rebuilds the per-user registration and
+    /// does NOT delete login, session or settings data (unlike Reset-AppxPackage).
+    /// Off by default: if it fails midway the package can be left unregistered.
+    #[serde(default)]
+    pub reregister_on_container_failure: bool,
 }
 
 impl AppConfig {
@@ -89,6 +101,8 @@ impl Default for AppConfig {
             close_to_tray: true,
             confirm_exit: true,
             log_level: "info".into(),
+            restart_appxsvc_on_container_failure: true,
+            reregister_on_container_failure: false,
         }
     }
 }

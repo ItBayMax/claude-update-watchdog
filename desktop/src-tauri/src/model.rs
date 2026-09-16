@@ -62,6 +62,12 @@ pub struct ContainerEvent {
     pub package_full_name: Option<String>,
     pub summary: String,
     pub error_hex: Option<String>,
+    /// Container GUID, present on 210 (created) and 217 (destroyed). Pairing
+    /// these two by id is the only reliable way to tell which containers are
+    /// still open: a failing launch emits 217 without a matching 210, so
+    /// counting events per package goes wrong.
+    #[serde(default)]
+    pub container_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -147,10 +153,25 @@ pub struct WatchStatus {
     pub last_failure: Option<LaunchFailure>,
     pub last_repair: Option<RepairRecord>,
     pub events: Vec<ContainerEvent>,
+    /// Desktop AppX containers created but not yet destroyed, oldest first.
+    /// One belonging to an older version is the blocker behind the class of
+    /// 0x80070020 failure that has no process left to terminate.
+    #[serde(default)]
+    pub open_containers: Vec<OpenContainer>,
     pub task: TaskStatus,
     pub policy_disable_auto_updates: Option<bool>,
     pub elevated: bool,
     pub repairing: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenContainer {
+    pub package_full_name: String,
+    pub version: String,
+    pub container_id: String,
+    /// True when this container belongs to a version other than the registered
+    /// one, i.e. it is blocking the current version from starting.
+    pub stale: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -82,6 +82,36 @@ export function SettingsPanel() {
 
       <Card>
         <CardHeader>
+          <CardTitle>容器级故障的补救</CardTitle>
+          <CardDescription>
+            同样报 0x80070020，却一个 Claude 进程都没有时，属于容器级故障：容器作业被卡住，杀进程没有任何用。
+            下面两步只在这种情况下才会执行。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Row
+            label="重启 AppX 部署服务 (AppXSvc)"
+            description="AppXSvc 独占一个 svchost，重启它会释放它对卡住容器作业的句柄。需要管理员权限。"
+          >
+            <Switch
+              checked={cfg.restart_appxsvc_on_container_failure}
+              onCheckedChange={(v) => update("restart_appxsvc_on_container_failure", v)}
+            />
+          </Row>
+          <Row
+            label="重新注册程序包（最后手段）"
+            description="Add-AppxPackage -Register 只重建当前用户的注册信息，不会删除登录、会话和设置。默认关闭：万一中途失败，程序包可能处于未注册状态。"
+          >
+            <Switch
+              checked={cfg.reregister_on_container_failure}
+              onCheckedChange={(v) => update("reregister_on_container_failure", v)}
+            />
+          </Row>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>启动与托盘</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">

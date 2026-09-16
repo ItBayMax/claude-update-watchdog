@@ -27,6 +27,22 @@ pub fn collect(state: &AppState) -> WatchStatus {
             .next();
     let last_failure = crate::eventlog::last_launch_failure(&aumid);
     let events = crate::eventlog::container_events(&cfg.package_family, 40);
+    let open_containers: Vec<crate::model::OpenContainer> =
+        crate::eventlog::live_containers(&cfg.package_family, 1500)
+            .into_iter()
+            .map(|(pkg, id)| {
+                let stale = current_full_name
+                    .as_deref()
+                    .map(|c| !c.eq_ignore_ascii_case(&pkg))
+                    .unwrap_or(false);
+                crate::model::OpenContainer {
+                    version: crate::packages::version_of(&pkg),
+                    package_full_name: pkg,
+                    container_id: id,
+                    stale,
+                }
+            })
+            .collect();
 
     let task = crate::task::cached_status();
     let policy_disable_auto_updates = crate::packages::policy_disable_auto_updates();
@@ -79,6 +95,7 @@ pub fn collect(state: &AppState) -> WatchStatus {
         last_failure,
         last_repair,
         events,
+        open_containers,
         task,
         policy_disable_auto_updates,
         elevated,
